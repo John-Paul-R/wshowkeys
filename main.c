@@ -133,6 +133,13 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state,
 	}
 }
 
+static void frame_callback(void *data, struct wl_callback *callback,
+		uint32_t time);
+
+static const struct wl_callback_listener frame_callback_listener = {
+	.done = frame_callback,
+};
+
 static void render_frame(struct wsk_state *state) {
 	cairo_surface_t *recorder = cairo_recording_surface_create(
 			CAIRO_CONTENT_COLOR_ALPHA, NULL);
@@ -174,9 +181,7 @@ static void render_frame(struct wsk_state *state) {
 		state->current_buffer = get_next_buffer(state->shm,
 				state->buffers, state->width * scale, state->height * scale);
 		if (!state->current_buffer) {
-			cairo_surface_destroy(recorder);
-			cairo_destroy(cairo);
-			return;
+			goto cleanup;
 		}
 		cairo_t *shm = state->current_buffer->cairo;
 
@@ -192,8 +197,28 @@ static void render_frame(struct wsk_state *state) {
 		wl_surface_attach(state->surface,
 				state->current_buffer->buffer, 0, 0);
 		wl_surface_damage_buffer(state->surface, 0, 0,
-				state->width, state->height);
+				state->width * scale, state->height * scale);
+
+		struct wl_callback *cb = wl_surface_frame(state->surface);
+		wl_callback_add_listener(cb, &frame_callback_listener, state);
+		state->frame_scheduled = true;
+
 		wl_surface_commit(state->surface);
+	}
+
+cleanup:
+	cairo_destroy(cairo);
+	cairo_surface_destroy(recorder);
+}
+
+static void frame_callback(void *data, struct wl_callback *callback,
+		uint32_t time) {
+	struct wsk_state *state = data;
+	wl_callback_destroy(callback);
+	state->frame_scheduled = false;
+	if (state->dirty) {
+		state->dirty = false;
+		render_frame(state);
 	}
 }
 
@@ -651,7 +676,12 @@ int main(int argc, char *argv[]) {
 
 		int timeout = -1;
 		if (state.keys) {
-			timeout = 100;
+			struct timespec now;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			long elapsed_ms = (now.tv_sec - state.last_key.tv_sec) * 1000
+				+ (now.tv_nsec - state.last_key.tv_nsec) / 1000000;
+			long remaining = state.timeout * 1000 - elapsed_ms;
+			timeout = remaining > 0 ? (int)remaining : 0;
 		}
 
 		if (poll(pollfds, sizeof(pollfds) / sizeof(pollfds[0]), timeout) < 0) {
@@ -660,18 +690,21 @@ int main(int argc, char *argv[]) {
 		}
 
 		/* Clear out old keys */
-		struct timespec now;
-		clock_gettime(CLOCK_MONOTONIC, &now);
-		if (now.tv_sec >= state.last_key.tv_sec + state.timeout &&
-				now.tv_nsec >= state.last_key.tv_nsec) {
-			struct wsk_keypress *key = state.keys;
-			while (key) {
-				struct wsk_keypress *next = key->next;
-				free(key);
-				key = next;
+		if (state.keys) {
+			struct timespec now;
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			long elapsed_ms = (now.tv_sec - state.last_key.tv_sec) * 1000
+				+ (now.tv_nsec - state.last_key.tv_nsec) / 1000000;
+			if (elapsed_ms >= state.timeout * 1000) {
+				struct wsk_keypress *key = state.keys;
+				while (key) {
+					struct wsk_keypress *next = key->next;
+					free(key);
+					key = next;
+				}
+				state.keys = NULL;
+				set_dirty(&state);
 			}
-			state.keys = NULL;
-			set_dirty(&state);
 		}
 
 		if ((pollfds[0].revents & POLLIN)) {

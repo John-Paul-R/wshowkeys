@@ -56,7 +56,7 @@ struct wsk_state {
 	struct wl_surface *surface;
 	struct zwlr_layer_surface_v1 *layer_surface;
 	uint32_t width, height;
-	bool frame_scheduled, dirty;
+	bool frame_scheduled, dirty, configured;
 	struct pool_buffer buffers[2];
 	struct pool_buffer *current_buffer;
 	struct wsk_output *output, *outputs;
@@ -162,10 +162,12 @@ static void render_frame(struct wsk_state *state) {
 	int scale = state->output ? state->output->scale : 1;
 	uint32_t width = 0, height = 0;
 	render_to_cairo(cairo, state, scale, &width, &height);
-	if (height / scale != state->height
+	if (!state->configured
+			|| height / scale != state->height
 			|| width / scale != state->width
 			|| state->width == 0) {
-		// Reconfigure surface
+		// Reconfigure surface -- no buffer until compositor acks the new size
+		state->configured = false;
 		if (width == 0 || height == 0) {
 			wl_surface_attach(state->surface, NULL, 0, 0);
 		} else {
@@ -237,6 +239,7 @@ static void layer_surface_configure(void *data,
 	state->width = width;
 	state->height = height;
 	zwlr_layer_surface_v1_ack_configure(zwlr_layer_surface_v1, serial);
+	state->configured = true;
 	set_dirty(state);
 }
 

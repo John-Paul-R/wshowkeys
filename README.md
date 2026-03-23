@@ -1,5 +1,3 @@
-# [UNMAINTAINED] Please use another fork.
-
 # wshowkeys
 
 Displays keypresses on screen on supported Wayland compositors (requires
@@ -7,34 +5,42 @@ Displays keypresses on screen on supported Wayland compositors (requires
 
 ![](https://sr.ht/xGs2.png)
 
-Forked from https://git.sr.ht/~sircmpwn/wshowkeys as Drew has moved onto other thigns.
+Forked from https://git.sr.ht/~sircmpwn/wshowkeys.
 
 ## Installation
 
-Dependencies:
+### Dependencies
 
 - cairo
 - libinput
 - pango
-- udev 
-- wayland 
-- xkbcommon 
+- udev
+- wayland
+- xkbcommon
+- Rust toolchain (stable or nightly, 2021 edition)
+
+### Build and install
 
 ```
-$ meson build
-$ ninja -C build
-# ninja -C build install
-# chmod a+s /usr/bin/wshowkeys
+cargo build --release
+sudo install -m 4755 -o root target/release/wshowkeys /usr/local/bin/wshowkeys
 ```
 
-wshowkeys must be configured as setuid during installation. It requires root
-permissions to read input events. These permissions are dropped after startup.
+The `install` command copies the binary, sets it owned by root, and sets the
+setuid bit in one step. wshowkeys requires setuid root to open input devices;
+privileges are dropped immediately after startup.
+
+To uninstall:
+
+```
+sudo rm /usr/local/bin/wshowkeys
+```
 
 ## Usage
 
 ```
 wshowkeys [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
-    [-a top|left|right|bottom] [-m margin] [-o output]
+    [-a top|left|right|bottom] [-m margin]
 ```
 
 - *-b #RRGGBB[AA]*: set background color
@@ -45,5 +51,3 @@ wshowkeys [-b|-f|-s #RRGGBB[AA]] [-F font] [-t timeout]
 - *-a top|left|right|bottom*: anchor the keystrokes to an edge. May be specified
   twice.
 - *-m margin*: set a margin (in pixels) from the nearest edge
-- *-o output*: request wshowkeys is shown on the specified output
-  (unimplemented)

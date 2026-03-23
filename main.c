@@ -15,6 +15,7 @@
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon.h>
 #include "devmgr.h"
+#include "config.h"
 #include "shm.h"
 #include "pango.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
@@ -24,6 +25,9 @@ struct wsk_keypress {
 	xkb_keysym_t sym;
 	char name[128];
 	char utf8[128];
+	enum wsk_color_override color_type;
+	uint32_t custom_color;
+	enum wsk_mod_override mod_override;
 	struct wsk_keypress *next;
 };
 
@@ -67,6 +71,7 @@ struct wsk_state {
 
 	struct wsk_keypress *keys;
 	struct timespec last_key;
+	struct wsk_config config;
 
 	bool run;
 };
@@ -108,8 +113,21 @@ static void render_to_cairo(cairo_t *cairo, struct wsk_state *state,
 		const char *name = key->utf8;
 		if (!name[0]) {
 			special = true;
-			cairo_set_source_u32(cairo, state->specialfg);
 			name = key->name;
+		}
+
+		if (key->mod_override == WSK_MOD_FORCE) {
+			special = true;
+		} else if (key->mod_override == WSK_MOD_SUPPRESS) {
+			special = false;
+		}
+
+		if (key->color_type == WSK_COLOR_CUSTOM) {
+			cairo_set_source_u32(cairo, key->custom_color);
+		} else if (key->color_type == WSK_COLOR_NONE) {
+			cairo_set_source_u32(cairo, state->foreground);
+		} else if (special) {
+			cairo_set_source_u32(cairo, state->specialfg);
 		} else {
 			cairo_set_source_u32(cairo, state->foreground);
 		}
@@ -481,6 +499,23 @@ static void handle_libinput_event(struct wsk_state *state,
 			keypress->utf8[0] = '\0';
 		}
 
+		const struct wsk_remap *remap =
+			wsk_config_find(&state->config, keypress->name);
+		if (remap) {
+			if (remap->has_display) {
+				if (keypress->utf8[0]) {
+					snprintf(keypress->utf8, sizeof(keypress->utf8),
+							"%s", remap->display);
+				} else {
+					snprintf(keypress->name, sizeof(keypress->name),
+							"%s", remap->display);
+				}
+			}
+			keypress->color_type = remap->color_type;
+			keypress->custom_color = remap->custom_color;
+			keypress->mod_override = remap->mod_override;
+		}
+
 		struct wsk_keypress **link = &state->keys;
 		while (*link) {
 			link = &(*link)->next;
@@ -507,24 +542,6 @@ static const struct libinput_interface libinput_impl = {
 	.open_restricted = libinput_open_restricted,
 	.close_restricted = libinput_close_restricted,
 };
-
-static uint32_t parse_color(const char *color) {
-	if (color[0] == '#') {
-		++color;
-	}
-
-	int len = strlen(color);
-	if (len != 6 && len != 8) {
-		fprintf(stderr, "Invalid color %s, defaulting to color "
-				"0xFFFFFFFF\n", color);
-		return 0xFFFFFFFF;
-	}
-	uint32_t res = (uint32_t)strtoul(color, NULL, 16);
-	if (strlen(color) == 6) {
-		res = (res << 8) | 0xFF;
-	}
-	return res;
-}
 
 int main(int argc, char *argv[]) {
 	/* NOTICE: This code runs as root */
@@ -586,6 +603,8 @@ int main(int argc, char *argv[]) {
 			return 1;
 		}
 	}
+
+	wsk_config_load(&state.config);
 
 	state.udev = udev_new();
 	if (!state.udev) {
@@ -730,6 +749,7 @@ int main(int argc, char *argv[]) {
 	}
 
 exit:
+	wsk_config_destroy(&state.config);
 	wl_display_disconnect(state.display);
 	libinput_unref(state.libinput);
 	devmgr_finish(state.devmgr, state.devmgr_pid);
